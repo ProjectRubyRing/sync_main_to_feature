@@ -32,7 +32,7 @@
 #
 # 依存: bash, git （grc remote の場合は aws, git-remote-codecommit）
 # 共通部品: common.sh （log_info / log_success / log_warn / log_error / die / run /
-#           confirm / require_command）
+#           confirm / require_command / select_branch_from_dir）
 #
 set -Eeuo pipefail
 
@@ -62,6 +62,9 @@ log_debug() {
 REPO_DIR=""                 # feature 作業ディレクトリ（必須）
 MAIN_BRANCH="main"          # 取り込み元（最新化された）ブランチ
 FEATURE_BRANCH=""           # 取り込み先。未指定なら現在チェックアウト中のブランチ
+FEATURE_FROM_DIR=""         # 指定時: このディレクトリ配下の git リポジトリから
+                            # 取り込み先ブランチを対話選択する（--feature の代替）
+SELECT_MAX_DEPTH="3"        # --feature-from-dir の探索深さ（find -maxdepth）
 REMOTE="origin"             # リモート名
 USE_REBASE="false"          # true なら merge ではなく rebase で取り込む
 UPDATE_LOCAL_MAIN="true"    # true ならローカル main を origin/main に ff 追従させる
@@ -100,6 +103,12 @@ usage() {
 オプション:
   --main       <name>     取り込み元ブランチ (既定: ${MAIN_BRANCH})
   --feature    <name>     取り込み先ブランチ (既定: 現在チェックアウト中のブランチ)
+  --feature-from-dir <path>
+                          指定ディレクトリ配下の git リポジトリ(.git が存在する
+                          ディレクトリ)を探索し、各リポジトリのチェックアウト中
+                          ブランチを選択肢として表示、選択したブランチを取り込み先
+                          にします（--feature の代わりの指定方法。併用は不可）
+  --select-depth <n>      --feature-from-dir の探索深さ (既定: ${SELECT_MAX_DEPTH})
   --remote     <name>     リモート名 (既定: ${REMOTE})
   --rebase                merge ではなく rebase で取り込む（履歴を一直線に保つ）
   --no-update-main        ローカル ${MAIN_BRANCH} を origin/${MAIN_BRANCH} に追従させない
@@ -139,6 +148,9 @@ AWS 認証 / CodeCommit 権限関連:
   # 未コミットの編集を退避してから取り込む
   ./${SCRIPT_NAME} --repo-dir ~/work/feature_login --autostash
 
+  # ~/work 配下の git リポジトリから取り込み先ブランチを対話選択する
+  ./${SCRIPT_NAME} --repo-dir ~/work/feature_login --feature-from-dir ~/work
+
   # CodeCommit 権限が無ければ別チーム提供シェルで自動スイッチロールして継続
   ./${SCRIPT_NAME} --repo-dir ~/work/feature_login \\
       --auto-switch-role --switch-role-script /opt/team/switch_role.sh
@@ -160,6 +172,8 @@ parse_args() {
       --repo-dir)        REPO_DIR="${2:-}"; shift 2 ;;
       --main)            MAIN_BRANCH="${2:-}"; shift 2 ;;
       --feature)         FEATURE_BRANCH="${2:-}"; shift 2 ;;
+      --feature-from-dir) FEATURE_FROM_DIR="${2:-}"; shift 2 ;;
+      --select-depth)    SELECT_MAX_DEPTH="${2:-}"; shift 2 ;;
       --remote)          REMOTE="${2:-}"; shift 2 ;;
       --rebase)          USE_REBASE="true"; shift 1 ;;
       --no-update-main)  UPDATE_LOCAL_MAIN="false"; shift 1 ;;
@@ -190,6 +204,35 @@ validate_inputs() {
   case "${REPO_DIR}" in
     "/"|"") die "危険なパスのため中止します: '${REPO_DIR}'" ;;
   esac
+
+  # --feature-from-dir 関連の検証
+  if [[ -n "${FEATURE_FROM_DIR}" ]]; then
+    [[ -z "${FEATURE_BRANCH}" ]] \
+      || die "--feature と --feature-from-dir は同時に指定できません。どちらか一方を指定してください。"
+    [[ -d "${FEATURE_FROM_DIR}" ]] \
+      || die "--feature-from-dir のディレクトリが存在しません: ${FEATURE_FROM_DIR}"
+  fi
+  case "${SELECT_MAX_DEPTH}" in
+    ''|*[!0-9]*) die "--select-depth は正の整数で指定してください: '${SELECT_MAX_DEPTH}'" ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
+# 4.2 取り込み先ブランチの対話選択（--feature-from-dir 指定時のみ）
+#   指定ディレクトリ配下の git リポジトリ(.git が存在するディレクトリ)を探索し、
+#   各リポジトリのチェックアウト中ブランチを選択肢として表示、選択された
+#   ブランチ名を FEATURE_BRANCH に設定する（--feature の代わりの指定方法）。
+#   実処理は common.sh の select_branch_from_dir を利用する。
+# ---------------------------------------------------------------------------
+resolve_feature_branch_from_dir() {
+  [[ -n "${FEATURE_FROM_DIR}" ]] || return 0
+
+  log_info "取り込み先ブランチを対話選択します（--feature-from-dir: ${FEATURE_FROM_DIR}）"
+  FEATURE_BRANCH="$(select_branch_from_dir "${FEATURE_FROM_DIR}" "${SELECT_MAX_DEPTH}")" \
+    || die "ブランチの選択に失敗しました。"
+  [[ -n "${FEATURE_BRANCH}" ]] \
+    || die "ブランチが選択されませんでした。--feature <name> での直接指定も利用できます。"
+  log_info "取り込み先ブランチ（選択結果）: ${FEATURE_BRANCH}"
 }
 
 # ---------------------------------------------------------------------------
@@ -696,6 +739,9 @@ verify_merged() {
 main() {
   parse_args "$@"
   validate_inputs
+  # --feature-from-dir 指定時: 取り込み先ブランチを対話選択で確定する
+  # ※ preflight で FEATURE_BRANCH を参照するため、その前に実行する。
+  resolve_feature_branch_from_dir
   preflight
   # AWS 認証 / CodeCommit 権限の事前確認（未認証なら終了 / 権限不足なら終了 or 自動スイッチロール）
   # ※ preflight でリモート種別(IS_CODECOMMIT)が確定した後に実行する。

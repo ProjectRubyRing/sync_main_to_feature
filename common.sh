@@ -99,3 +99,84 @@ require_command() {
   local cmd="$1"
   command -v "$cmd" >/dev/null 2>&1 || die "コマンドが見つかりません: $cmd"
 }
+
+# ---------------------------------------------------------------------------
+# 指定ディレクトリ配下から git リポジトリ(.git が存在するディレクトリ)を探索し、
+# 各リポジトリのチェックアウト中ブランチを番号付きの選択肢として表示する。
+# ユーザが選択したブランチ名を標準出力へ返す
+# (呼び出し側でブランチ名を直接指定する引数の代わりに使う)。
+#
+# usage: select_branch_from_dir <base_dir> [max_depth(既定: 3)]
+#   例: branch="$(select_branch_from_dir ~/work)"
+#
+#   - .git はディレクトリだけでなくファイル(worktree / submodule)も対象とする。
+#   - detached HEAD などブランチ名を特定できないリポジトリは警告してスキップする。
+#   - メニュー・プロンプトはすべて stderr へ出力する(stdout は選択結果専用。
+#     このファイルの log_info は stdout へ出力するため、本関数内では使わない)。
+#   - 入力は /dev/tty から読む(コマンド置換 `$(...)` 内でも対話できるようにするため)。
+#     対話端末が無い場合はエラー終了する。
+# ---------------------------------------------------------------------------
+select_branch_from_dir() {
+  local base="${1:?select_branch_from_dir: ディレクトリを指定してください}"
+  local max_depth="${2:-3}"
+
+  [[ -d "${base}" ]] || die "ブランチ選択用のディレクトリが見つかりません: ${base}"
+  require_command git
+  require_command find
+
+  # --- git リポジトリの探索 -------------------------------------------------
+  #   .git を見つけたら -prune でその配下(リポジトリ内部)へは降りない。
+  local -a repo_dirs=() repo_branches=()
+  local gitpath repo_dir branch
+  while IFS= read -r gitpath; do
+    repo_dir="$(dirname "${gitpath}")"
+    # チェックアウト中のブランチ名(detached HEAD の場合は取得できない)
+    if branch="$(git -C "${repo_dir}" symbolic-ref --short -q HEAD 2>/dev/null)" \
+        && [[ -n "${branch}" ]]; then
+      repo_dirs+=("${repo_dir}")
+      repo_branches+=("${branch}")
+    else
+      log_warn "ブランチを特定できないためスキップします(detached HEAD 等): ${repo_dir}"
+    fi
+  done < <(find "${base}" -maxdepth "${max_depth}" -name .git -prune \
+             \( -type d -o -type f \) -print 2>/dev/null | sort)
+
+  [[ "${#repo_dirs[@]}" -ge 1 ]] \
+    || die "指定ディレクトリ配下に git リポジトリ(.git)が見つかりませんでした: ${base}"
+
+  # --- 選択肢の表示(stderr) -------------------------------------------------
+  printf '%s[INFO]%s  ブランチを選択してください(%s 配下の git リポジトリから検出):\n' \
+    "$C_BLUE" "$C_RESET" "${base}" >&2
+  local i
+  for i in "${!repo_dirs[@]}"; do
+    printf '  %2d) %s  (ブランチ: %s)\n' \
+      "$((i + 1))" "${repo_dirs[$i]}" "${repo_branches[$i]}" >&2
+  done
+
+  # --- 対話入力(/dev/tty) ---------------------------------------------------
+  [[ -r /dev/tty ]] \
+    || die "対話端末が無いためブランチを選択できません。ブランチ名を引数で直接指定してください。"
+
+  local ans=""
+  while :; do
+    printf '番号を入力してください [1-%d] (q で中止): ' "${#repo_dirs[@]}" >&2
+    read -r ans </dev/tty 2>/dev/null \
+      || die "入力を読み取れませんでした。対話端末が無い場合はブランチ名を引数で直接指定してください。"
+    case "${ans}" in
+      q|Q)
+        die "ブランチ選択を中止しました。" ;;
+      ''|*[!0-9]*)
+        log_warn "数値を入力してください: ${ans}" ;;
+      *)
+        if [[ "${ans}" -ge 1 && "${ans}" -le "${#repo_dirs[@]}" ]]; then
+          branch="${repo_branches[$((ans - 1))]}"
+          printf '%s[INFO]%s  選択されたブランチ: %s (%s)\n' \
+            "$C_BLUE" "$C_RESET" "${branch}" "${repo_dirs[$((ans - 1))]}" >&2
+          printf '%s\n' "${branch}"
+          return 0
+        fi
+        log_warn "1〜${#repo_dirs[@]} の範囲で入力してください: ${ans}"
+        ;;
+    esac
+  done
+}

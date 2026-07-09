@@ -1,0 +1,40 @@
+# sync_main_to_feature_helper.conf.example
+# =========================================
+# ヘルパー(sync_main_to_feature_helper.sh)の既定値を上書きする設定ファイルの例です。
+# 使う場合は、このファイルを同じディレクトリに
+#   sync_main_to_feature_helper.conf
+# という名前でコピーし、必要な行のコメントを外して編集してください。
+# （ヘルパー起動時に source されます。bash の構文で記述してください）
+#
+# ここに既定値を集約しておくことで、実行時に外から指定するパラメータを
+# <repo_dir> だけに減らせます。
+
+# --- 元スクリプトのパス -----------------------------------------------------
+# ヘルパーを別ディレクトリ・別リポジトリに配置した場合は、元スクリプトの
+# 絶対パスをここで指定する（相対パスの場合はヘルパー起動時の cwd 基準に
+# なってしまうため、絶対パス推奨）。
+#TARGET_SCRIPT="/c/Users/taka_/claude/CodeCommit_Git_main_Sync/sync_main_to_feature.sh"
+
+# --- 取り込み動作の既定値 ----------------------------------------------------
+#DEFAULT_MAIN_BRANCH="main"     # 取り込み元ブランチ
+#DEFAULT_REMOTE="origin"        # リモート名
+#DEFAULT_USE_REBASE="false"     # true: merge ではなく rebase で取り込む
+#DEFAULT_AUTOSTASH="true"       # true: 未コミット変更を自動退避して取り込む
+#DEFAULT_ASSUME_YES="false"     # true: 対話確認をスキップ（CI 等向け）
+
+# --- スイッチロール制御 -------------------------------------------------------
+# スイッチロール用シェル（別チーム提供）の絶対パス。
+# 設定しておくと、CodeCommit 権限が無い場合に元スクリプトのプロセス内で
+# source され、自動でスイッチロールされる（DEFAULT_AUTO_SWITCH_ROLE=auto 時）。
+#DEFAULT_SWITCH_ROLE_SCRIPT="/opt/team/switch_role.sh"
+
+# auto : スイッチロール用シェルのパスが設定されていれば --auto-switch-role を付与
+# true : 常に --auto-switch-role を付与
+# false: 付与しない（権限不足時は案内を出して終了する、元スクリプトの既定動作）
+#DEFAULT_AUTO_SWITCH_ROLE="auto"
+
+# --- 自由に追加できる既定オプション --------------------------------------------
+# 元スクリプト(sync_main_to_feature.sh)の任意のオプションを常時付与できる。
+#EXTRA_DEFAULT_ARGS+=("--debug")
+#EXTRA_DEFAULT_ARGS+=("--no-update-main")
+#EXTRA_DEFAULT_ARGS+=("--select-depth" "2")
